@@ -1,0 +1,138 @@
+#!/usr/bin/env python
+
+import argparse
+import sys
+import struct
+import hashlib
+
+# NOTE: This tool only knows about SHA1, SHA256, SHA384, and SHA512, which
+#       covers all the different TPMs I've run across (both real and virtual).
+
+
+def digest_token(alg_name):
+    if alg_name == "sha1":
+        return 0x0004
+    if alg_name == "sha256":
+        return 0x000b
+    if alg_name == "sha384":
+        return 0x000c
+    if alg_name == "sha512":
+        return 0x000d
+    raise ValueError('unknown hash algorithm ', alg_name)
+
+
+def digest_name(alg_token):
+    if alg_token == 0x0004:
+        return "sha1"
+    if alg_token == 0x000b:
+        return "sha256"
+    if alg_token == 0x000c:
+        return "sha384"
+    if alg_token == 0x000d:
+        return "sha512"
+    raise ValueError('unknown hash algorithm ', alg_token)
+
+
+def digest_size(alg_token):
+    if alg_token == 0x0004:
+        # sha1
+        return 20
+    if alg_token == 0x000b:
+        # sha256
+        return 32
+    if alg_token == 0x000c:
+        # sha384
+        return 48
+    if alg_token == 0x000d:
+        # sha512
+        return 64
+    raise ValueError('unknown hash algorithm ', alg_token)
+
+
+def pcr_setup(count, banks):
+    pcrs = {}
+    for i in banks:
+        alg_token = digest_token(i)
+        alg_size = digest_size(alg_token)
+        pcrs[i] = [b'\x00' * alg_size] * count
+        if (count >= 17):
+            for j in range(17, min(count, 23)):
+                pcrs[i][j] = b'\xff' * alg_size
+    return pcrs
+
+
+def pcr_extend(pcr, bank, value):
+    if bank == "sha1":
+        h = hashlib.sha1()
+    elif bank == "sha256":
+        h = hashlib.sha256()
+    elif bank == "sha384":
+        h = hashlib.sha384()
+    elif bank == "sha512":
+        h = hashlib.sha512()
+    else:
+        raise ValueError('unknown PCR bank ', bank)
+    h.update(pcrs[bank][pcr])
+    h.update(value)
+    pcrs[bank][pcr] = h.digest()
+    return pcrs[bank][pcr]
+
+
+# main
+#
+
+# tpm pcr definition
+pcr_count = 24
+pcr_banks = ["sha1", "sha256", "sha384", "sha512"]
+
+# parse the args similar to tpm2_pcrread (e.g. "sha1:1,2+sha256:3")
+a_parser = argparse.ArgumentParser(
+    description="Replay a TPM2 event log from stdin.")
+a_parser.add_argument("pcrs",
+                      nargs="?",
+                      default="",
+                      help="PCR specification (see tpm2_pcrread(1) manpage)")
+args = a_parser.parse_args()
+o_pcrs = {}
+for i in pcr_banks:
+    o_pcrs[i] = [False] * pcr_count
+if args.pcrs == "":
+    # print all by default
+    for i in pcr_banks:
+        o_pcrs[i] = [True] * pcr_count
+else:
+    # only print the specified pcrs
+    for i in args.pcrs.split("+"):
+        alg_name = i.split(":")[0]
+        if (":" in i):
+            for j in i.split(":")[1].split(","):
+                o_pcrs[alg_name][int(j)] = True
+        else:
+            o_pcrs[alg_name] = [True] * pcr_count
+
+# setup the initial pcr values
+pcrs = pcr_setup(pcr_count, pcr_banks)
+
+# read the tpm2 event log from stdin
+stream = sys.stdin.buffer.read()
+while stream:
+    e_pcr, e_type, e_d_count = struct.unpack("<III", stream[:12])
+    stream = stream[12:]
+    for i in range(0, e_d_count):
+        e_d_alg = struct.unpack("<H", stream[:2])[0]
+        stream = stream[2:]
+        alg_size = digest_size(e_d_alg)
+        e_d_digest = stream[:alg_size]
+        pcr_extend(e_pcr, digest_name(e_d_alg), e_d_digest)
+        stream = stream[alg_size:]
+    e_e_size = struct.unpack("<I", stream[:4])[0]
+    stream = stream[4:]
+    stream = stream[e_e_size:]
+
+for i in pcr_banks:
+    if True in o_pcrs[i]:
+        print("{}:".format(i))
+    for j in range(0, pcr_count):
+        if (o_pcrs[i][j]):
+            pcr_val = pcrs[i][j].hex().upper()
+            print("  {0:<2d}: 0x{1:s}".format(j, pcr_val))
