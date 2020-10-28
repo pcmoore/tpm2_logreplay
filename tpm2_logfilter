@@ -1,0 +1,190 @@
+#!/usr/bin/env python
+
+import argparse
+import sys
+import struct
+import hashlib
+
+# NOTE: This tool only knows about SHA1, SHA256, SHA384, and SHA512, which
+#       covers all the different TPMs I've run across (both real and virtual).
+
+
+def digest_token(alg_name):
+    if alg_name == "sha1":
+        return 0x0004
+    if alg_name == "sha256":
+        return 0x000b
+    if alg_name == "sha384":
+        return 0x000c
+    if alg_name == "sha512":
+        return 0x000d
+    raise ValueError('unknown hash algorithm ', alg_name)
+
+
+def digest_name(alg_token):
+    if alg_token == 0x0004:
+        return "sha1"
+    if alg_token == 0x000b:
+        return "sha256"
+    if alg_token == 0x000c:
+        return "sha384"
+    if alg_token == 0x000d:
+        return "sha512"
+    raise ValueError('unknown hash algorithm ', alg_token)
+
+
+def digest_size(alg_token):
+    if alg_token == 0x0004:
+        # sha1
+        return 20
+    if alg_token == 0x000b:
+        # sha256
+        return 32
+    if alg_token == 0x000c:
+        # sha384
+        return 48
+    if alg_token == 0x000d:
+        # sha512
+        return 64
+    raise ValueError('unknown hash algorithm ', alg_token)
+
+
+def event_type_name(type_token):
+    if type_token == 0x00000000:
+        return "EV_PREBOOT_CERT"
+    if type_token == 0x00000001:
+        return "EV_POST_CODE"
+    if type_token == 0x00000003:
+        return "EV_NO_ACTION"
+    if type_token == 0x00000004:
+        return "EV_SEPARATOR"
+    if type_token == 0x00000005:
+        return "EV_ACTION"
+    if type_token == 0x00000006:
+        return "EV_EVENT_TAG"
+    if type_token == 0x00000007:
+        return "EV_S_CRTM_CONTENTS"
+    if type_token == 0x00000008:
+        return "EV_S_CRTM_VERSION"
+    if type_token == 0x00000009:
+        return "EV_CPU_MICROCODE"
+    if type_token == 0x0000000A:
+        return "EV_PLATFORM_CONFIG_FLAGS"
+    if type_token == 0x0000000B:
+        return "EV_TABLE_OF_DEVICES"
+    if type_token == 0x0000000C:
+        return "EV_COMPACT_HASH"
+    if type_token == 0x000000D:
+        return "EV_IPL"
+    if type_token == 0x0000000F:
+        return "EV_NONHOST_CODE"
+    if type_token == 0x00000010:
+        return "EV_NONHOST_CONFIG"
+    if type_token == 0x00000011:
+        return "EV_NONHOST_INFO"
+    if type_token == 0x00000012:
+        return "EV_OMIT_BOOT_DEVICE_EVENTS"
+    if type_token == 0x80000001:
+        return "EV_EFI_VARIABLE_DRIVER_CONFIG"
+    if type_token == 0x80000002:
+        return "EV_EFI_VARIABLE_BOOT"
+    if type_token == 0x80000003:
+        return "EV_EFI_BOOT_SERVICES_APPLICATION"
+    if type_token == 0x80000004:
+        return "EV_EFI_BOOT_SERVICES_DRIVER"
+    if type_token == 0x80000005:
+        return "EV_EFI_RUNTIME_SERVICES_DRIVER"
+    if type_token == 0x80000006:
+        return "EV_EFI_GPT_EVENT"
+    if type_token == 0x80000007:
+        return "EV_EFI_ACTION"
+    if type_token == 0x80000008:
+        return "EV_EFI_PLATFORM_FIRMWARE_BLOB"
+    if type_token == 0x80000009:
+        return "EV_EFI_HANDOFF_TABLES"
+    if type_token == 0x8000000A:
+        return "EV_EFI_PLATFORM_FIRMWARE_BLOB2"
+    if type_token == 0x8000000B:
+        return "EV_EFI_HANDOFF_TABLES2"
+    if type_token == 0x80000010:
+        return "EV_EFI_HCRTM_EVENT"
+    if type_token == 0x800000E0:
+        return "EV_EFI_VARIABLE_AUTHORITY"
+    if type_token == 0x800000E1:
+        return "EV_EFI_SPDM_FIRMWARE_BLOB"
+    if type_token == 0x800000E2:
+        return "EV_EFI_SPDM_FIRMWARE_CONFIG"
+    return str("UNK_{0:d}").format(type_token)
+
+
+# main
+#
+
+# tpm pcr definition
+pcr_count = 24
+pcr_banks = ["sha1", "sha256", "sha384", "sha512"]
+
+# parse the args similar to tpm2_pcrread (e.g. "sha1:1,2+sha256:3")
+a_parser = argparse.ArgumentParser(
+    description="Render a TPM2 event log into text for easy processing.")
+a_parser.add_argument("pcrs",
+                      nargs="?",
+                      default="",
+                      help="PCR specification (see tpm2_pcrread(1) manpage)")
+args = a_parser.parse_args()
+o_pcrs = {}
+for i in pcr_banks:
+    o_pcrs[i] = [False] * pcr_count
+if args.pcrs == "":
+    # print all by default
+    for i in pcr_banks:
+        o_pcrs[i] = [True] * pcr_count
+else:
+    # only print the specified pcrs
+    for i in args.pcrs.split("+"):
+        alg_name = i.split(":")[0]
+        if (":" in i):
+            for j in i.split(":")[1].split(","):
+                o_pcrs[alg_name][int(j)] = True
+        else:
+            o_pcrs[alg_name] = [True] * pcr_count
+# create a quick "cheater" list with all the pcr_banks or'd together
+o_pcrs["all"] = [False] * pcr_count
+for i in pcr_banks:
+    o_pcrs["all"] = [j or k for j, k in zip(o_pcrs["all"], o_pcrs[i])]
+
+# read the tpm2 event log from stdin
+stream = sys.stdin.buffer.read()
+while stream:
+    o_line = ""
+    o_digests = ""
+    e_pcr, e_type, e_d_count = struct.unpack("<III", stream[:12])
+    e_type_name = event_type_name(e_type)
+    stream = stream[12:]
+    o_line += str("pcr:{0:d} ").format(e_pcr)
+    for i in range(0, e_d_count):
+        e_d_alg = struct.unpack("<H", stream[:2])[0]
+        e_d_name = digest_name(e_d_alg)
+        stream = stream[2:]
+        alg_size = digest_size(e_d_alg)
+        e_d_digest = stream[:alg_size]
+        stream = stream[alg_size:]
+        if o_pcrs[e_d_name][e_pcr]:
+            o_digests += str("{0:s}").format(e_d_name)
+            o_digests += str(":0x{0:s} ").format(e_d_digest.hex().upper())
+    e_e_size = struct.unpack("<I", stream[:4])[0]
+    stream = stream[4:]
+    if (e_type_name == "EV_EFI_VARIABLE_AUTHORITY"
+            or e_type_name == "EV_EFI_VARIABLE_DRIVER_CONFIG"
+            or e_type_name == "EV_EFI_VARIABLE_BOOT"):
+        e_e_var_namelen = struct.unpack("<Q", stream[16:24])[0] * 2
+        e_e_var_name = stream[32:32 + e_e_var_namelen]
+        o_line += str("type:{0:s}").format(e_type_name)
+        o_line += str("({0:s}) ").format(e_e_var_name.decode())
+    else:
+        o_line += str("type:{0:s} ").format(e_type_name)
+    stream = stream[e_e_size:]
+    if o_pcrs["all"][e_pcr]:
+        print("{0:s}{1:s}".format(o_line, o_digests))
+
+# kate: syntax Python; tab-width 4; indent-width 4; replace-tabs on;

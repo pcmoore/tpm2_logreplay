@@ -1,10 +1,15 @@
-TPM2 Event Log Replay Tool
+TPM2 Event Log Tools
 ===============================================================================
 Contact: pmoore2@cisco.com or paul@paul-moore.com
 
-This repository contains a relatively simple Python script which is designed
-to read a TPM2 event log from standard input, replay the PCR extension events,
-and write the resulting TPM2 PCR values to stdout.
+This repository contains some simple Python scripts for working with TPM2 event
+logs.
+
+### tpm2_logreplay
+
+The `tpm2_logreplay` tool is designed to read a TPM2 event log from standard
+input, replay the PCR extension events, and write the resulting TPM2 PCR values
+to stdout.
 
 Both the output and the TPM2 PCR selection arguments are designed to mimic the
 `tpm2_pcrread` tool.  Output comparisons between the two tools is easy as you
@@ -36,4 +41,27 @@ sha256:
   5 : 0xA15F67B8E23253AB66D5C8126316993303BFB2DB95165C06449008107F7A8D20
   6 : 0x3D458CFE55CC03EA1F443F1562BEEC8DF51C75E14A9FCF9A7234A13F198E7969
   7 : 0x0C4082EF5BEDDFD13740C1DD56813612AD487CD4935AF1B134EFF019CEF3C263
+```
+
+### tpm2_logfilter
+
+The `tpm2_logfilter` tool is similar to `tpm2_eventlog` but instead of
+providing a verbose text representation of the TPM2 event log, it produces a
+condensed text output that limits each event to a single line of output.  The
+`tpm2_logfilter` tool also offers basic filtering using the same PCR selection
+arguments as the `tpm2_logreplay` tool described above.
+
+Example:
+
+```
+% cat /sys/kernel/security/tpm0/binary_bios_measurements | \
+  ./tpm2_logfilter sha1:7
+pcr:7 type:EV_EFI_VARIABLE_DRIVER_CONFIG(SecureBoot) sha1:0xD4FDD1F14D4041494DEB8FC990C45343D2277D08 
+pcr:7 type:EV_EFI_VARIABLE_DRIVER_CONFIG(PK) sha1:0x397A8C41851E62BF7114970635CF22D7E57AED22 
+pcr:7 type:EV_EFI_VARIABLE_DRIVER_CONFIG(KEK) sha1:0xEA1ACED0368ABE97BDD43843DAEF31B76A22D580 
+pcr:7 type:EV_EFI_VARIABLE_DRIVER_CONFIG(db) sha1:0xCA4A61F2310C8EA81EB3924C4D04C1D11D122B3F 
+pcr:7 type:EV_EFI_VARIABLE_DRIVER_CONFIG(dbx) sha1:0x734424C9FE8FC71716C42096F4B74C88733B175E 
+pcr:7 type:EV_SEPARATOR sha1:0x9069CA78E7450A285173431B3E52C5C25299E473 
+pcr:7 type:EV_EFI_VARIABLE_AUTHORITY(db) sha1:0x61D410E43D69120FB55734386F9F8D703F07EB76 
+pcr:7 type:EV_EFI_VARIABLE_AUTHORITY(db) sha1:0xC0524512A5008C40743B06C6F0496CB38F86A5FF
 ```
