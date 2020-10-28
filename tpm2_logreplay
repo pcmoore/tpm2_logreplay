@@ -136,3 +136,5 @@ for i in pcr_banks:
         if (o_pcrs[i][j]):
             pcr_val = pcrs[i][j].hex().upper()
             print("  {0:<2d}: 0x{1:s}".format(j, pcr_val))
+
+# kate: syntax Python; tab-width 4; indent-width 4; replace-tabs on;
